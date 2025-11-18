@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Binance P2P Highlighter Settings</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    label {
+      display: block;
+      margin-top: 10px;
+    }
+    input {
+      margin-top: 5px;
+      padding: 4px;
+      width: 150px;
+    }
+    button {
+      margin-top: 15px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h2>Binance P2P Highlighter Settings</h2>
+  <label>
+    Minimum amount:
+    <input type="number" id="minAmount" />
+  </label>
+  <label>
+    Maximum amount:
+    <input type="number" id="maxAmount" />
+  </label>
+  <label>
+    Currency code (e.g. UAH, USD, EUR):
+    <input type="text" id="currency" />
+  </label>
+  <label>
+    Max price (highlight offers at or below this):
+    <input type="number" id="maxPrice" step="0.0001" />
+  </label>
+  <label>
+  Pages to check:
+  <input type="number" id="pagesToCheck" min="1" max="10" />
+</label>
+  <button id="save">Save</button>
+  <p id="status"></p>
+
+  <script src="options.js"></script>
+</body>
+</html>

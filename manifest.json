@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Binance P2P Best Price",
+  "version": "1.2",
+  "description": "This extension highlights Binance P2P offers matching your desired purchase range for a selected currency.",
+  "permissions": ["storage"],
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://p2p.binance.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["ding.mp3"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
