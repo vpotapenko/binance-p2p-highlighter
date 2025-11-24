@@ -1,6 +1,6 @@
 # Binance P2P Best Price!
 
-![Version](https://img.shields.io/badge/version-1.2-blue) ![Chrome Extension](https://img.shields.io/badge/platform-Chrome-google)
+![Version](https://img.shields.io/badge/version-1.9-blue) ![Chrome Extension](https://img.shields.io/badge/platform-Chrome-google)
 
 **Binance P2P Best Price** is a powerful Chrome extension that automates the search for profitable P2P offers on Binance. It filters advertisers by reliability, highlights offers matching your amount range, and alerts you when a price hits your target.
 
