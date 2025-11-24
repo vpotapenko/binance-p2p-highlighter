@@ -1,4 +1,5 @@
-Binance P2P Best Price Highlighter
+Binance P2P Best Price 
+
 Binance P2P Best Price is a Chrome extension designed to help traders and users identify the best P2P offers on Binance automatically. It filters offers based on amount ranges, advertiser reputation, and price thresholds, providing visual and audio cues when a target offer is found.
 
 🚀 Key Features
