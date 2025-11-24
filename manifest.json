@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Binance P2P Best Price",
-  "version": "1.2",
+  "version": "1.9",
   "description": "This extension highlights Binance P2P offers matching your desired purchase range for a selected currency.",
   "permissions": ["storage"],
   "options_page": "options.html",
