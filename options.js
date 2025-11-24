@@ -1,6 +1,6 @@
 // Load saved settings when the options page opens
 document.addEventListener('DOMContentLoaded', () => {
-  chrome.storage.sync.get(['minAmount', 'maxAmount', 'currency', 'maxPrice'], (data) => {
+  chrome.storage.sync.get(['minAmount', 'maxAmount', 'currency', 'maxPrice', 'pagesToCheck'], (data) => {
     document.getElementById('minAmount').value = data.minAmount ?? '';
     document.getElementById('maxAmount').value = data.maxAmount ?? '';
     document.getElementById('currency').value = data.currency || 'UAH';

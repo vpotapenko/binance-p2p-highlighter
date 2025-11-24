@@ -5,22 +5,136 @@
 // - Bold text "100.00% completion"
 // - Sound + blink on best Price
 // - Cleans up stale highlights (handles virtualized rows & text updates via MutationObserver)
+// - Logs matched offers (Price <= MaxPrice) to Chrome Storage (Max 10 entries)
+// - Auto-clears matched offers log if >12h passed since last match
 
 (() => {
-  // --- sound (safe with Chrome autoplay policy) ---
+  // --- sound (безопасен с политикой автовоспроизведения Chrome) ---
   const priceSound = new Audio(chrome.runtime.getURL('ding.mp3'));
-  priceSound.volume = 1.0;
+  priceSound.volume = 1.0; // Устанавливаем громкость
 
-  let pagesToCheck = 2; // default fallback
+  let pagesToCheck = 2; // Количество страниц для автоматической проверки (значение по умолчанию)
 
-function playPriceSound() {
-  try {
-    console.log('[P2P-Extension] Attempting to play sound…');
-    priceSound.play();
+  // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ АНАЛИЗА ЦЕН ---
+  let priceHistory = [];      // Накапливает цены
+  let averagePriceLog = [];   // Хранит историю расчетов {timestamp, average}
+  let matchedOffersLog = [];  // Хранит историю найденных совпадений {timestamp, price, offerText}
+  
+  // Ключи для сохранения данных в Chrome Storage
+  const PRICE_HISTORY_KEY = 'p2pPriceHistory';
+  const AVG_PRICE_LOG_KEY = 'p2pAveragePriceLog';
+  const MATCHED_OFFERS_KEY = 'p2pMatchedOffersLog';
+
+
+  /**
+   * Вспомогательная функция форматирования даты для логов
+   */
+  function formatDateForLog(timestamp) {
+      const date = new Date(timestamp);
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = months[date.getMonth()];
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      
+      return `${day}-${month} ${hours}:${minutes}`;
+  }
+
+  /**
+   * Форматирует массив средних цен для вывода в консоль.
+   */
+  function formatAveragePriceLog() {
+      if (!averagePriceLog.length) return '[]';
+      
+      return '[\n' + averagePriceLog.map(item => {
+          const dateTime = formatDateForLog(item.timestamp);
+          return `  {${dateTime}, price: ${item.average.toFixed(2)} UAH}`;
+      }).join(',\n') + '\n]';
+  }
+
+  /**
+   * Форматирует лог совпадений цен для вывода в консоль
+   */
+  function formatMatchedOffersLog() {
+      if (!matchedOffersLog.length) return '[]';
+
+      return '[\n' + matchedOffersLog.map(item => {
+          const dateTime = formatDateForLog(item.timestamp);
+          return `  ${dateTime}, price: ${item.price.toFixed(2)} UAH, offer: ${item.offerText}`;
+      }).join(',\n') + '\n]';
+  }
+
+  // --- ФУНКЦИИ УПРАВЛЕНИЯ ХРАНИЛИЩЕМ (PERSISTENCE) ---
+  
+  /**
+   * Загружает данные из chrome.storage.sync при запуске скрипта.
+   */
+  function loadDataFromStorage(callback) {
+      chrome.storage.sync.get([PRICE_HISTORY_KEY, AVG_PRICE_LOG_KEY, MATCHED_OFFERS_KEY], (data) => {
+          // Загружаем данные
+          priceHistory = data[PRICE_HISTORY_KEY] || [];
+          averagePriceLog = data[AVG_PRICE_LOG_KEY] || [];
+          matchedOffersLog = data[MATCHED_OFFERS_KEY] || [];
+
+          // --- НОВАЯ ЛОГИКА ОЧИСТКИ (CLEANUP) ---
+          if (matchedOffersLog.length > 0) {
+              const lastEntry = matchedOffersLog[matchedOffersLog.length - 1]; // Берем последнюю запись
+              const now = Date.now();
+              const twelveHoursMs = 12 * 60 * 60 * 1000; // 12 часов в миллисекундах
+
+              // Если прошло больше 12 часов с момента последней записи
+              if (now - lastEntry.timestamp > twelveHoursMs) {
+                  console.log('[P2P-Extension] Matched Offers Log is stale (>12h since last match). Clearing...');
+                  matchedOffersLog = []; // Очищаем массив в памяти
+                  // Сразу сохраняем очищенное состояние, чтобы не тащить старые данные
+                  chrome.storage.sync.set({ [MATCHED_OFFERS_KEY]: [] }); 
+              }
+          }
+          // ---------------------------------------
+
+          console.log(`[P2P-Extension] Loaded: PriceHistory(${priceHistory.length}), AvgLog(${averagePriceLog.length}), MatchedLog(${matchedOffersLog.length}).`);
+          
+          // Вывод логов в консоль
+          console.log(`[P2P-Extension] Average Price Log: ${formatAveragePriceLog()}`);
+          console.log(`[P2P-Extension] Matched Offers Log: ${formatMatchedOffersLog()}`);
+          
+          if (callback) callback();
+      });
+  }
+
+  /**
+   * Сохраняет текущий массив priceHistory.
+   */
+  function savePriceHistory() {
+      chrome.storage.sync.set({ [PRICE_HISTORY_KEY]: priceHistory });
+  }
+  
+  /**
+   * Сохраняет текущий массив averagePriceLog.
+   */
+  function saveAveragePriceLog() {
+      chrome.storage.sync.set({ [AVG_PRICE_LOG_KEY]: averagePriceLog });
+  }
+
+  /**
+   * Сохраняет массив matchedOffersLog.
+   */
+  function saveMatchedOffersLog() {
+      chrome.storage.sync.set({ [MATCHED_OFFERS_KEY]: matchedOffersLog });
+  }
+  
+  /**
+   * Воспроизводит звук уведомления о цене.
+   */
+  function playPriceSound() {
+    try {
+      console.log('[P2P-Extension] Attempting to play sound…');
+      priceSound.play();
     } catch (e) {
       console.error('[P2P-Extension] Sound play() threw exception:', e);
     }
-}
+  }
 
 
   // --- CSS + логика мигания Price ---
@@ -32,12 +146,12 @@ function playPriceSound() {
   100% { background-color: rgba(255, 159, 67, 0.25); }
 }
 .p2p-price-blink {
-  animation: p2pBlink 0.5s ease-in-out 6; /* 6 цикла = 3 секунды */
+  animation: p2pBlink 0.5s ease-in-out 6;
 }
 `;
   (document.head || document.documentElement).appendChild(blinkStyle);
 
-function blinkPriceCell(el) {
+  function blinkPriceCell(el) {
     if (!el) return;
     el.classList.add('p2p-price-blink');
     setTimeout(() => {
@@ -45,53 +159,75 @@ function blinkPriceCell(el) {
     }, 3000);
   }
 
+  // --- ЛОГИКА РАСЧЕТА И УПРАВЛЕНИЯ ПЕРСИСТЕНТНОСТЬЮ ---
+
+  function executePriceAnalysis() {
+      const MIN_PRICES_FOR_ANALYSIS = 50;
+      const PERCENTAGE_TO_TAKE = 0.35;
+      const MAX_LOG_ENTRIES = 40;
+
+      if (priceHistory.length <= MIN_PRICES_FOR_ANALYSIS) {
+          console.log(`[P2P-Extension] Price analysis skipped: only ${priceHistory.length} prices accumulated (< ${MIN_PRICES_FOR_ANALYSIS}).`);
+          return;
+      }
+
+      const sortedPrices = [...priceHistory].sort((a, b) => a - b);
+      const count = Math.ceil(sortedPrices.length * PERCENTAGE_TO_TAKE);
+      const lowestPrices = sortedPrices.slice(0, count);
+      const sum = lowestPrices.reduce((acc, price) => acc + price, 0);
+      const average = sum / count;
+
+      const now = Date.now();
+      const logEntry = {
+          timestamp: now,
+          average: average,
+          totalPrices: priceHistory.length,
+          pricesCounted: count
+      };
+      averagePriceLog.push(logEntry);
+
+      if (averagePriceLog.length > MAX_LOG_ENTRIES) {
+          averagePriceLog = averagePriceLog.slice(-MAX_LOG_ENTRIES); 
+          console.log(`[P2P-Extension] Average Price Log trimmed to last ${MAX_LOG_ENTRIES} entries.`);
+      }
+
+      saveAveragePriceLog();
+
+      const date = new Date(now);
+      const time = String(date.getHours()).padStart(2, '0') + ':' + 
+                   String(date.getMinutes()).padStart(2, '0');
+      console.log(`[P2P-Extension] [${time}] Price Analysis Completed: 
+        Total Prices: ${logEntry.totalPrices}, 
+        Lowest ${PERCENTAGE_TO_TAKE * 100}% (${logEntry.pricesCounted} items) Average Price: ${average.toFixed(4)}`);
+
+      priceHistory = []; 
+  }
+
+  // --- Логика автообновления и переключения страниц при бездействии ---
   (function () {
     let lastMove = Date.now();
 
-    document.addEventListener('mousemove', () => {
-      lastMove = Date.now();
-    });
-
-    document.addEventListener('keydown', () => {
-      lastMove = Date.now();
-    });
-
-    document.addEventListener('scroll', () => {
-      lastMove = Date.now();
-    });
-
-    function formatIdle(ms) {
-      const sec = Math.floor(ms / 1000);
-      if (sec < 60) return `${sec}s`;
-
-      const m = Math.floor(sec / 60);
-      const s = sec % 60;
-      return `${m}m ${s}s`;
-    }
+    document.addEventListener('mousemove', () => { lastMove = Date.now(); });
+    document.addEventListener('keydown', () => { lastMove = Date.now(); });
+    document.addEventListener('scroll', () => { lastMove = Date.now(); });
 
     let autoReloadEnabled = true;
-    let currentPage = null; // текущая страница P2P (1–5)
+    let currentPage = null;
 
-    // Пытаемся считать текущую страницу из пагинации
     function detectCurrentPage() {
-      // чаще всего у активной страницы есть aria-current="page"
       const ariaEl = document.querySelector('[aria-current="page"]');
       if (ariaEl) {
         const n = parseInt(ariaEl.textContent.trim(), 10);
         if (!Number.isNaN(n)) return n;
       }
-
-      // запасной вариант – элемент с классом .active внутри пагинации
       const activeEl = document.querySelector('.bn-pagination .active');
       if (activeEl) {
         const n = parseInt(activeEl.textContent.trim(), 10);
         if (!Number.isNaN(n)) return n;
       }
-
       return null;
     }
 
-    // Клик по кнопке с номером страницы
     function goToPage(page) {
       const targetText = String(page);
       const btn = Array.from(document.querySelectorAll('button, a')).find(
@@ -100,6 +236,10 @@ function blinkPriceCell(el) {
 
       if (btn) {
         console.log(`[P2P-Extension] Idle -> go to page ${page} of total ${pagesToCheck}`);
+        
+        executePriceAnalysis(); 
+        savePriceHistory(); 
+
         btn.click();
         return true;
       }
@@ -107,24 +247,20 @@ function blinkPriceCell(el) {
       console.log(`[P2P-Extension] Page ${page} button not found, fallback reload`);
       return false;
     }
+    
 
     setInterval(() => {
       const now = Date.now();
       const idleMs = now - lastMove;
-
-      //console.log(`Idle: ${formatIdle(idleMs)}`);
-      console.log(`[${String(new Date().getHours()).padStart(2,'0')}:${String(new Date().getMinutes()).padStart(2,'0')}] Idle: ${formatIdle(idleMs)}`);
-
-      // --- Do NOT reload on fiatOrderDetail page ---
+      
       const isDetailPage = location.href.includes("/en/fiatOrderDetail");
 
       if (!isDetailPage && autoReloadEnabled && idleMs > 15000) {
-        // обновляем текущую страницу по DOM, если возможно
         const domPage = detectCurrentPage();
         if (domPage != null) {
           currentPage = domPage;
         } else if (currentPage == null) {
-          currentPage = 1; // по умолчанию считаем, что мы на странице 1
+          currentPage = 1;
         }
 
         if (currentPage < pagesToCheck) {
@@ -132,32 +268,34 @@ function blinkPriceCell(el) {
           const switched = goToPage(nextPage);
           if (switched) {
             currentPage = nextPage;
-            // сбрасываем таймер неактивности, чтобы новые 15 сек шли уже на новой странице
             lastMove = Date.now();
           } else {
-            // если не смогли найти кнопку страницы – безопасный fallback
             console.log('[P2P-Extension] Fallback -> full reload');
+            executePriceAnalysis(); 
+            savePriceHistory(); 
             location.reload();
           }
         } else {
-          // если уже страница последняя — делаем полный reload
           console.log(`[P2P-Extension] Idle on page ${pagesToCheck} -> full reload`);
+          executePriceAnalysis(); 
+          savePriceHistory(); 
           location.reload();
         }
       }
-
     }, 3000);
-
   })();
 
-  // ---------- utils ----------
+  // ---------- utils (Вспомогательные функции) ----------
+  
   function parseNumber(str) {
     if (!str) return null;
     let s = String(str).replace(/\s/g, '');
     const hasComma = s.includes(',');
     const hasDot = s.includes('.');
+
     if (hasComma && hasDot) s = s.replace(/,/g, '');
     else if (hasComma && !hasDot) s = s.replace(/,/g, '.');
+
     s = s.replace(/[^0-9.]/g, '');
     const firstDot = s.indexOf('.');
     if (firstDot !== -1) {
@@ -165,6 +303,7 @@ function blinkPriceCell(el) {
       const after = s.slice(firstDot + 1).replace(/\./g, '');
       s = before + after;
     }
+
     const num = parseFloat(s);
     return Number.isFinite(num) ? num : null;
   }
@@ -176,16 +315,15 @@ function blinkPriceCell(el) {
     );
     const m = text.match(regex);
     if (!m) return null;
+
     const min = parseNumber(m[1]);
     const max = parseNumber(m[2]);
+
     if (min == null || max == null) return null;
     return { min, max };
   }
 
   function rangesOverlap(userMin, userMax, offerMin, offerMax) {
-    
-    //console.log(`offerMin: ${offerMin}, offerMax: ${offerMax}`);
-
     if (userMin == null || userMax == null) return false;
     return offerMin <= userMax && offerMax >= userMin;
   }
@@ -197,32 +335,27 @@ function blinkPriceCell(el) {
     );
   }
 
+  function getAdvertiserStats(row) {
+    const advCell = getAdvertiserCell(row);
+    if (!advCell) return { completion: null, orders: null, advCell: null };
 
-function getAdvertiserStats(row) {
-  const advCell = getAdvertiserCell(row);
-  if (!advCell) return { completion: null, orders: null, advCell: null };
+    const statsEl = getStatsElement(advCell);
+    const text = statsEl
+      ? (statsEl.innerText || '')
+      : (advCell.innerText || '');
 
-  const statsEl = getStatsElement(advCell);
-  const text = statsEl
-    ? (statsEl.innerText || '')
-    : (advCell.innerText || '');
+    const cm = text.match(/(\d{1,3}(?:\.\d+)?)%\s+completion/i);
+    const completion = cm ? parseFloat(cm[1]) : null;
 
-  const cm = text.match(/(\d{1,3}(?:\.\d+)?)%\s+completion/i);
-  const completion = cm ? parseFloat(cm[1]) : null;
+    const om = text.match(/(\d+)\s+orders\b/i);
+    let orders = null;
+    if (om) {
+      const raw = om[1].replace(/[^\d]/g, '');
+      if (raw) orders = parseInt(raw, 10);
+    }
 
-  const om = text.match(/(\d+)\s+orders\b/i);
-  let orders = null;
-  if (om) {
-    const raw = om[1].replace(/[^\d]/g, ''); // убираем пробелы/нецифры
-    if (raw) orders = parseInt(raw, 10);
+    return { completion, orders, advCell };
   }
-  
-  //console.log(`Text: ${text}`);
-  //console.log(`In Parcing completion: ${completion}, orders: ${orders}`);
-
-  return { completion, orders, advCell };
-}
-
 
   function advertiserEligible(stats) {
     const { completion, orders } = stats;
@@ -233,23 +366,26 @@ function getAdvertiserStats(row) {
   function advertiserVIP(stats) {
     const { completion, orders } = stats;
     if (completion == null || orders == null) return false;
-    //console.log(`completion: ${completion}, orders: ${orders}`);
     return completion >= 97 && orders >= 450;
   }
 
   function getStatsElement(advCell) {
     if (!advCell) return null;
     const nodes = Array.from(advCell.querySelectorAll('*'));
+
     const combined = nodes.filter((n) => {
       const t = (n.innerText || '').trim();
       return /\borders\b/i.test(t) && /%/.test(t);
     });
+
     if (combined.length) {
       combined.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
       return combined[0];
     }
+
     const orderNode = nodes.find((n) => /\borders\b/i.test((n.innerText || '').trim()));
     const percentNode = nodes.find((n) => /%/.test((n.innerText || '').trim()));
+
     if (orderNode && percentNode) {
       let a = orderNode;
       while (a) {
@@ -274,6 +410,7 @@ function getAdvertiserStats(row) {
   }
 
   // ---------- VIP Outline + cleanup ----------
+
   function updateVipOutline(row, stats, isRowGreen) {
     const advCell = getAdvertiserCell(row);
     if (!advCell) return;
@@ -281,14 +418,12 @@ function getAdvertiserStats(row) {
     const statsEl = getStatsElement(advCell);
     const needVip = isRowGreen && advertiserVIP(stats);
 
-    // Remove any legacy wrappers if statsEl gone (DOM reshuffle)
     if (!statsEl) {
       advCell.querySelectorAll('.p2p-stats-outline').forEach((w) => w.remove());
       row.dataset.uahVipApplied = '0';
       return;
     }
 
-    // find or create wrapper
     let wrap = statsEl.querySelector('.p2p-stats-outline');
 
     if (needVip) {
@@ -297,11 +432,9 @@ function getAdvertiserStats(row) {
         wrap.className = 'p2p-stats-outline';
         while (statsEl.firstChild) wrap.appendChild(statsEl.firstChild);
         statsEl.appendChild(wrap);
-        // makes the border hug content width
         statsEl.style.display = 'contents';
       }
 
-      // Tight gold border styling
       wrap.style.display = 'inline-flex';
       wrap.style.width = 'max-content';
       wrap.style.maxWidth = 'max-content';
@@ -313,7 +446,6 @@ function getAdvertiserStats(row) {
       wrap.style.boxSizing = 'border-box';
       row.dataset.uahVipApplied = '1';
 
-      // Bold exact "100.00% completion"
       const nodes = Array.from(wrap.querySelectorAll('*')).concat([wrap]);
       nodes.forEach((n) => {
         if (n.innerText && n.innerText.includes('100.00% completion')) {
@@ -324,9 +456,7 @@ function getAdvertiserStats(row) {
         }
       });
     } else {
-      // Remove ALL outlines for non-VIP (handles row reuse)
       advCell.querySelectorAll('.p2p-stats-outline').forEach((w) => {
-        // unwrap back into statsEl (if still present)
         if (statsEl && w.parentElement === statsEl) {
           while (w.firstChild) statsEl.appendChild(w.firstChild);
         }
@@ -336,11 +466,13 @@ function getAdvertiserStats(row) {
     }
   }
 
-  // ---------- main ----------
+  // ---------- main (Основная логика) ----------
+
   function highlightOffers(userSettings, root = document) {
     const { minAmount, maxAmount, currency, maxPrice } = userSettings || {};
     const hasAmountRange = minAmount != null && maxAmount != null && !!currency;
 
+    // --- 1. Подсветка диапазона (зеленый) ---
     if (hasAmountRange) {
       const elements = (root || document).querySelectorAll('div, span, td');
       elements.forEach((el) => {
@@ -359,24 +491,25 @@ function getAdvertiserStats(row) {
         const stats = getAdvertiserStats(row);
         const eligible = advertiserEligible(stats);
 
-        // always run once to cleanup VIP on reused rows
         updateVipOutline(row, stats, false);
 
         if (eligible && rangesOverlap(minAmount, maxAmount, range.min, range.max)) {
-          // green highlight on this amount cell
           if (range.max >= 20000) {
             el.style.backgroundColor = 'rgba(46, 189, 133, 0.25)';
           } else {
             el.style.backgroundColor = 'rgba(46, 189, 133, 0.08)';
           }
 
-          //console.log(`offerMin: ${range.min}, offerMax: ${range.max}`);
+          if (range.max > 25000) {
+              el.style.fontWeight = 'bold';
+          }
           
           el.style.borderRadius = '6px';
           el.style.boxShadow = '0 0 0 1px rgba(46, 189, 133, 0.8)';
-          row.dataset.uahMatched = '1';
+          row.dataset.uahMatched = '1'; 
+          
+          row.dataset.uahOfferText = text.replace(/\s+/g, ' ').trim(); 
 
-          // VIP outline (if qualifies)
           updateVipOutline(row, stats, true);
         } else {
           row.dataset.uahMatched = '0';
@@ -384,7 +517,7 @@ function getAdvertiserStats(row) {
       });
     }
 
-    // Price highlight (orange)
+    // --- 2. Подсветка цены (оранжевый) ---
     if (maxPrice != null) {
       const priceCells = (root || document).querySelectorAll(
         'tbody.bn-web-table-tbody td[aria-colindex="2"][role="cell"], td[aria-colindex="2"][role="cell"]'
@@ -396,7 +529,13 @@ function getAdvertiserStats(row) {
         const text = cell.textContent || '';
         const price = parseNumber(text);
         if (price == null) return;
+        
+        if (row.dataset.uahPriceAdded !== '1') {
+             priceHistory.push(price);
+             row.dataset.uahPriceAdded = '1';
+        }
 
+        // Если цена <= максимальной цене пользователя
         if (price <= maxPrice) {
           const badge = wrapTextNodeIfNeeded(cell, 'p2p-price-highlight');
           badge.style.backgroundColor = 'rgba(255, 159, 67, 0.25)';
@@ -405,14 +544,34 @@ function getAdvertiserStats(row) {
           badge.style.padding = '0 4px';
           badge.style.display = 'inline-block';
 
-          // ---- play sound + blink when price highlight triggers (once per cell) ----
+          // --- ЛОГИРОВАНИЕ СОВПАДЕНИЯ (MATCH) ---
+          if (!cell.dataset.uahLogAdded) {
+              const matchEntry = {
+                  timestamp: Date.now(),
+                  price: price,
+                  offerText: row.dataset.uahOfferText || 'N/A'
+              };
+              
+              matchedOffersLog.push(matchEntry);
+              
+              if (matchedOffersLog.length > 10) {
+                  matchedOffersLog = matchedOffersLog.slice(-10);
+              }
+              
+              saveMatchedOffersLog();
+              
+              console.log(`[P2P-Extension] Matched Offer Logged: ${matchEntry.price} UAH`);
+              
+              cell.dataset.uahLogAdded = '1'; 
+          }
+
           if (!cell.dataset.uahPriceSoundPlayed) {
             const now = new Date();
             const time = now.getHours().toString().padStart(2, '0') + ":" +
-             now.getMinutes().toString().padStart(2, '0');
+              now.getMinutes().toString().padStart(2, '0');
 
             console.log("Highlighted price:", price, "-", time);
-            
+
             blinkPriceCell(badge);
             flashTabTitle(сurrentPage(), price);
             flashTabAlertIcon();
@@ -425,182 +584,142 @@ function getAdvertiserStats(row) {
     }
   }
 
-    function сurrentPage() {
-      // чаще всего у активной страницы есть aria-current="page"
-      const ariaEl = document.querySelector('[aria-current="page"]');
-      if (ariaEl) {
-        const n = parseInt(ariaEl.textContent.trim(), 10);
-        if (!Number.isNaN(n)) return n;
-      }
+  function сurrentPage() {
+    const ariaEl = document.querySelector('[aria-current="page"]');
+    if (ariaEl) {
+      const n = parseInt(ariaEl.textContent.trim(), 10);
+      if (!Number.isNaN(n)) return n;
     }
-
- function flashTabAlertIcon() {
-  // запоминаем оригинальный favicon, если он есть
-  const originalLink = document.querySelector("link[rel~='icon']");
-  const originalHref = originalLink ? originalLink.href : "";
-
-  // жёлтый треугольник с чёрной рамкой и восклицательным знаком
-  const alertIcon = "data:image/svg+xml," + encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-      <defs>
-        <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#FFD54F"/>
-          <stop offset="100%" stop-color="#FFA000"/>
-        </linearGradient>
-      </defs>
-      <polygon points="32,4 4,60 60,60" fill="url(#g)" stroke="#000" stroke-width="3"/>
-      <rect x="29" y="20" width="6" height="20" rx="2" fill="#000"/>
-      <circle cx="32" cy="47" r="3" fill="#000"/>
-    </svg>
-  `);
-
-  function setFavicon(href) {
-    let link = document.querySelector("link[rel~='icon']");
-    if (!link) {
-      link = document.createElement("link");
-      link.rel = "icon";
-      document.head.appendChild(link);
-    }
-    link.href = href;
   }
+  
+  function flashTabAlertIcon() {
+    const originalLink = document.querySelector("link[rel~='icon']");
+    const originalHref = originalLink ? originalLink.href : "";
 
-  let toggle = false;
-
-  const interval = setInterval(() => {
-    // мигаем между ALERT-иконкой и оригинальным (если был)
-    if (toggle) {
-      setFavicon(alertIcon);
-    } else {
-      if (originalHref) {
-        setFavicon(originalHref);
-      } else {
-        setFavicon(alertIcon);
-      }
-    }
-    toggle = !toggle;
-  }, 400); // скорость мигания (мс)
-
-  // через 5 секунд перестаём мигать и возвращаем оригинальный favicon
-  setTimeout(() => {
-    clearInterval(interval);
-    if (originalHref) {
-      setFavicon(originalHref);
-    } else {
-      setFavicon(alertIcon); // если не было своего, оставим ALERT
-    }
-  }, 6000);
-}
- 
-
-  function flashTabTitle(page, price) {
-    const original = document.title;
-    const msg = `🔥${page}: ${price}`;
-    let flip = true;
-
-    //document.title = msg;
-    
-    const interval = setInterval(() => {
-      document.title = flip ? msg : original;
-      //flip = !flip;
-    }, 1000);
-
-    // stop after ~5 seconds
-    setTimeout(() => {
-      clearInterval(interval);
-      //document.title = original;
-    }, 6000);
-    
-  }
-
-  function flashTabColor() {
-    const original = document.querySelector("link[rel='icon']")?.href || "";
-    
-    const redIcon = "data:image/svg+xml," + encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-        <rect width="64" height="64" fill="red"/>
+    const alertIcon = "data:image/svg+xml," + encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#FFD54F"/>
+            <stop offset="100%" stop-color="#FFA000"/>
+          </linearGradient>
+        </defs>
+        <polygon points="32,4 4,60 60,60" fill="url(#g)" stroke="#000" stroke-width="3"/>
+        <rect x="29" y="20" width="6" height="20" rx="2" fill="#000"/>
+        <circle cx="32" cy="47" r="3" fill="#000"/>
       </svg>
     `);
-    
-    const yellowIcon = "data:image/svg+xml," + encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-        <rect width="64" height="64" fill="yellow"/>
-      </svg>
-    `);
+
+    function setFavicon(href) {
+      let link = document.querySelector("link[rel~='icon']");
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        document.head.appendChild(link);
+      }
+      link.href = href;
+    }
 
     let toggle = false;
 
     const interval = setInterval(() => {
-      const link = document.querySelector("link[rel='icon']") || document.createElement("link");
-      link.rel = "icon";
-      link.href = toggle ? redIcon : yellowIcon;
-      document.head.appendChild(link);
+      if (toggle) {
+        setFavicon(alertIcon);
+      } else {
+        if (originalHref) {
+          setFavicon(originalHref);
+        } else {
+          setFavicon(alertIcon);
+        }
+      }
       toggle = !toggle;
     }, 400);
 
     setTimeout(() => {
       clearInterval(interval);
-      if (original) {
-        const link = document.querySelector("link[rel='icon']");
-        if (link) link.href = original;
+      if (originalHref) {
+        setFavicon(originalHref);
+      } else {
+        setFavicon(alertIcon);
       }
-    }, 5000);
+    }, 6000);
+  }
+
+  /**
+   * Заставляет заголовок вкладки мигать с указанием страницы и цены.
+   * @param {number | null} page Номер страницы.
+   * @param {number} price Цена.
+   */
+  function flashTabTitle(page, price) {
+    const original = document.title;
+    const msg = `🔥${page}: ${price}`; // Сообщение для мигания
+    let flip = true;
+
+    // document.title = msg; // Можно сразу установить
+
+    const interval = setInterval(() => {
+      // document.title = flip ? msg : original;
+      document.title = msg; // Оставляем только "🔥X: YYY"
+      // flip = !flip;
+    }, 1000);
+
+    // Останавливаем мигание через ~6 секунд
+    setTimeout(() => {
+      clearInterval(interval);
+      document.title = original; // Возвращаем оригинальный заголовок
+    }, 6000);
   }
 
 
   function startHighlighting() {
-    chrome.storage.sync.get(
-      ['minAmount', 'maxAmount', 'currency', 'maxPrice', 'pagesToCheck'],
-      (settings) => {
-        if (!settings) return;
-        
-        pagesToCheck = settings.pagesToCheck ?? 2;
-        
-        // initial scan
-        highlightOffers(settings);
+      chrome.storage.sync.get(
+        ['minAmount', 'maxAmount', 'currency', 'maxPrice', 'pagesToCheck'],
+        (settings) => {
+          if (!settings) return;
 
-        // Observe DOM updates incl. text changes (virtualized list)
-        const observer = new MutationObserver((mutations) => {
-          for (const m of mutations) {
-            if (m.type === 'characterData') {
-              const row =
-                m.target.parentElement && m.target.parentElement.closest
-                  ? m.target.parentElement.closest('tr')
-                  : null;
-              if (row) {
-                // Re-scan just this row for speed
-                highlightOffers(settings, row);
-                continue;
+          pagesToCheck = settings.pagesToCheck ?? 2;
+
+          highlightOffers(settings);
+
+          const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+              if (m.type === 'characterData') {
+                const row =
+                  m.target.parentElement && m.target.parentElement.closest
+                    ? m.target.parentElement.closest('tr')
+                    : null;
+                if (row) {
+                  highlightOffers(settings, row);
+                  continue;
+                }
               }
+              if (m.type === 'attributes') {
+                const row = m.target.closest && m.target.closest('tr');
+                if (row) {
+                  highlightOffers(settings, row);
+                  continue;
+                }
+              }
+              m.addedNodes.forEach((node) => {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                  const row = node.closest && node.closest('tr');
+                  highlightOffers(settings, row || node);
+                }
+              });
             }
-            if (m.type === 'attributes') {
-              const row = m.target.closest && m.target.closest('tr');
-              if (row) {
-                highlightOffers(settings, row);
-                continue;
-              }
-            }
-            // handle newly added nodes
-            m.addedNodes.forEach((node) => {
-              if (node.nodeType === Node.ELEMENT_NODE) {
-                const row = node.closest && node.closest('tr');
-                highlightOffers(settings, row || node);
-              }
-            });
-          }
-        });
+          });
 
-        observer.observe(document.body, {
-          childList: true,
-          subtree: true,
-          characterData: true,   // watch text updates
-          attributes: true       // watch class/style updates on reused nodes
-        });
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+            attributes: true
+          });
 
-        // Safety net: periodic light rescan (throttled)
-        setInterval(() => highlightOffers(settings, document.body), 4000);
-      }
-    );
+          setInterval(() => highlightOffers(settings, document.body), 4000);
+        }
+      );
   }
 
-  startHighlighting();
+  loadDataFromStorage(startHighlighting);
 })();
