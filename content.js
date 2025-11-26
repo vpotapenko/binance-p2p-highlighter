@@ -67,7 +67,8 @@
 
   // --- ФУНКЦИИ УПРАВЛЕНИЯ ХРАНИЛИЩЕМ (PERSISTENCE) ---
   
-  /**
+
+/**
    * Загружает данные из chrome.storage.sync при запуске скрипта.
    */
   function loadDataFromStorage(callback) {
@@ -76,18 +77,51 @@
           priceHistory = data[PRICE_HISTORY_KEY] || [];
           averagePriceLog = data[AVG_PRICE_LOG_KEY] || [];
           matchedOffersLog = data[MATCHED_OFFERS_KEY] || [];
+          
+          const now = Date.now();
 
-          // --- НОВАЯ ЛОГИКА ОЧИСТКИ (CLEANUP) ---
+          // --- 1. ЛОГИКА ОЧИСТКИ PRICE HISTORY (ОБНОВЛЕНО) ---
+          // Если последняя запись анализа (averagePriceLog) старше 4 часов:
+          // 1. Очищаем priceHistory
+          // 2. Добавляем запись с ценой 0 в averagePriceLog (чтобы не очищать повторно при перезагрузке)
+          if (averagePriceLog.length > 0) {
+              const lastAvgEntry = averagePriceLog[averagePriceLog.length - 1];
+              const fourHoursMs = 4 * 60 * 60 * 1000; // 4 часа
+
+              if (now - lastAvgEntry.timestamp > fourHoursMs) {
+                  console.log('[P2P-Extension] Last Average Price Log is stale (>4h). Clearing accumulated PriceHistory & Adding reset entry...');
+                  
+                  // Сброс истории цен
+                  priceHistory = []; 
+                  chrome.storage.sync.set({ [PRICE_HISTORY_KEY]: [] }); 
+
+                  // Добавление технической записи "сброса", чтобы обновить таймер
+                  const resetEntry = {
+                      timestamp: now,
+                      average: 0.0,
+                      totalPrices: 0,
+                      pricesCounted: 0
+                  };
+                  averagePriceLog.push(resetEntry);
+                  
+                  // Ограничиваем размер лога, если нужно (например, держим последние 40)
+                  const MAX_LOG_ENTRIES = 40;
+                  if (averagePriceLog.length > MAX_LOG_ENTRIES) {
+                      averagePriceLog = averagePriceLog.slice(-MAX_LOG_ENTRIES);
+                  }
+
+                  chrome.storage.sync.set({ [AVG_PRICE_LOG_KEY]: averagePriceLog });
+              }
+          }
+
+          // --- 2. ЛОГИКА ОЧИСТКИ MATCHED OFFERS (СУЩЕСТВУЮЩЕЕ) ---
           if (matchedOffersLog.length > 0) {
-              const lastEntry = matchedOffersLog[matchedOffersLog.length - 1]; // Берем последнюю запись
-              const now = Date.now();
-              const twelveHoursMs = 12 * 60 * 60 * 1000; // 12 часов в миллисекундах
+              const lastEntry = matchedOffersLog[matchedOffersLog.length - 1]; 
+              const twelveHoursMs = 12 * 60 * 60 * 1000; // 12 часов
 
-              // Если прошло больше 12 часов с момента последней записи
               if (now - lastEntry.timestamp > twelveHoursMs) {
                   console.log('[P2P-Extension] Matched Offers Log is stale (>12h since last match). Clearing...');
-                  matchedOffersLog = []; // Очищаем массив в памяти
-                  // Сразу сохраняем очищенное состояние, чтобы не тащить старые данные
+                  matchedOffersLog = []; 
                   chrome.storage.sync.set({ [MATCHED_OFFERS_KEY]: [] }); 
               }
           }
@@ -129,7 +163,7 @@
    */
   function playPriceSound() {
     try {
-      console.log('[P2P-Extension] Attempting to play sound…');
+      //console.log('[P2P-Extension] Attempting to play sound…');
       priceSound.play();
     } catch (e) {
       console.error('[P2P-Extension] Sound play() threw exception:', e);
